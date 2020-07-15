@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# dhcpd-run: Script to start the dhcpd daemon.
+
+set -e
+
+# Check config file.
+if [ ! -e /etc/dhcp/dhcpd.conf ]; then
+  echo "Error: Configuration file '/etc/dhcp/dhcpd.conf' not found!"
+  echo "Do you need to run dhcpd-setup?"
+  exit 1
+fi
+
+# Create a link to persistent kerberos configuration file, if needed.
+if [ ! -e /etc/krb5.conf ]; then
+  ln -s /etc/dhcp/krb5.conf /etc/krb5.conf
+fi
+
+# Create a link to the persistent dhcpduser keytab.
+if [ ! -e /etc/dhcpduser.keytab ]; then
+  ln -s /etc/dhcp/dhcpduser.keytab /etc/dhcpduser.keytab
+fi
+
+# Create empty lease files, if necessary.
+touch /var/lib/dhcpd/dhcpd.leases
+touch /var/lib/dhcpd/dhcpd6.leases
+
+# Make sure ownership and permissions are good.
+chmod 644 /var/lib/dhcpd/*.leases
+chown -R dhcpd:dhcpd /var/lib/dhcpd/*
+
+# Run the daemon.
+exec /usr/sbin/dhcpd -f -cf /etc/dhcp/dhcpd.conf -user dhcpd -group dhcpd --no-pid $DHCPDARGS
+

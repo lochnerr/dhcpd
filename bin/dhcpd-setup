@@ -1,0 +1,318 @@
+#!/bin/sh
+
+# dhcpd-setup: Setup dhcpd envirnment for samba active directory domain controller.
+
+# Config files based on: https://wiki.samba.org/index.php/Configure_DHCP_to_update_DNS_records_with_BIND9
+# As of: 2020/05/06
+
+create_dyndns_conf() {
+
+  OUT="$1"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-dyndns.conf"
+
+  echo "Creating $OUT file."
+
+  cat >>$OUT <<-__EOD__
+	# Dynamic DNS Update Support
+
+	on commit {
+	  set noname = concat("dhcp-", binary-to-ascii(10, 8, "-", leased-address));
+	  set ClientIP = binary-to-ascii(10, 8, ".", leased-address);
+	  set ClientDHCID = concat (
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,1,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,2,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,3,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,4,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,5,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,6,1))),2)
+	  );
+	  set ClientName = pick-first-value(option host-name, config-option-host-name, client-name, noname);
+	  log(concat("Commit: IP: ", ClientIP, " DHCID: ", ClientDHCID, " Name: ", ClientName));
+	  execute("/usr/local/bin/dhcp-dyndns.sh", "add", ClientIP, ClientDHCID, ClientName);
+	}
+
+	on release {
+	  set ClientIP = binary-to-ascii(10, 8, ".", leased-address);
+	  set ClientDHCID = concat (
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,1,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,2,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,3,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,4,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,5,1))),2), ":",
+	    suffix (concat ("0", binary-to-ascii (16, 8, "", substring(hardware,6,1))),2)
+	  );
+	  log(concat("Release: IP: ", ClientIP));
+	  execute("/usr/local/bin/dhcp-dyndns.sh", "delete", ClientIP, ClientDHCID);
+	}
+
+	on expiry {
+	  set ClientIP = binary-to-ascii(10, 8, ".", leased-address);
+	  # cannot get a ClientMac here, apparently this only works when actually receiving a packet
+	  log(concat("Expired: IP: ", ClientIP));
+	  # cannot get a ClientName here, for some reason that always fails
+	  execute("/usr/local/bin/dhcp-dyndns.sh", "delete", ClientIP, "", "0");
+	}
+
+	__EOD__
+}
+
+create_omapi_conf() {
+
+  OUT="$1"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-omapi.conf"
+
+  echo "Creating $OUT file."
+  
+  key="$DHCP_OMAPI"
+  if [ -n "$key" ]; then
+    echo "Using user supplied OMAPI key."
+  else
+    echo "Creating new OMAPI key."
+
+    # Generate the omapi key.
+    dnssec-keygen -a HMAC-MD5 -b 512 -n USER DHCP_OMAPI
+
+    # Now extract it:
+    key="$(cat Kdhcp_omapi.+*.private | grep ^Key | cut -d ' ' -f2)"
+
+    # Remove the key file.
+    rm Kdhcp_omapi.+*
+  
+  fi
+
+  # Build a key entry.
+  cat >>$OUT <<-__EOD__
+	# OMAPI Shared Key Configuration.
+
+	omapi-port 7911;
+	omapi-key omapi_key;
+
+	key "omapi_key" {
+	     algorithm hmac-md5;
+	     secret "$key";
+	};
+	__EOD__
+}
+
+create_primary_conf() {
+
+  OUT="$1"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-primary.conf"
+
+  echo "Creating $OUT file."
+
+  # Build a key entry.
+  cat >>$OUT <<-__EOD__
+
+	failover peer "dhcp-failover" {
+	  primary;
+	  address ${DHCP_PRI};
+	  peer address ${DHCP_SEC};
+	  max-response-delay 60;
+	  max-unacked-updates 10;
+	  mclt 3600;
+	  split 128;
+	  load balance max seconds 3;
+	}
+
+	authoritative;
+	ddns-update-style none;
+
+	include "/etc/dhcp/dhcpd-omapi.conf";
+
+	include "/etc/dhcp/dhcpd-subnets-ip4.conf";
+
+	include "/etc/dhcp/dhcpd-reservations-ip4.conf";
+
+	include "/etc/dhcp/dhcpd-dyndns.conf";
+	__EOD__
+}
+
+create_secondary_conf() {
+
+  OUT="$1"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-secondary.conf"
+
+  echo "Creating $OUT file."
+
+  # Build a key entry.
+  cat >>$OUT <<-__EOD__
+
+	failover peer "dhcp-failover" {
+	  secondary;
+	  address ${DHCP_SEC};
+	  peer address ${DHCP_PRI};
+	  max-response-delay 60;
+	  max-unacked-updates 10;
+	  load balance max seconds 3;
+	}
+
+	authoritative;
+	ddns-update-style none;
+
+	include "/etc/dhcp/dhcpd-omapi.conf";
+
+	include "/etc/dhcp/dhcpd-subnets-ip4.conf";
+
+	include "/etc/dhcp/dhcpd-reservations-ip4.conf";
+
+	include "/etc/dhcp/dhcpd-dyndns.conf";
+	__EOD__
+}
+
+create_subnet_conf() {
+
+  OUT="$1"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-subnets-ip4.conf"
+
+  echo "Creating $OUT file."
+  
+  DOMAIN="$( echo $REALM | tr 'A-Z' 'a-z')"
+
+  cat >>$OUT <<-__EOD__
+	# The following DHCP options are non-standard and have to be defined before they can be used.
+	#option cisco_server code 150 =  ip-address;
+	option polycom_server code 160 = text;
+	option polycom_vlan code 144 = text;
+
+	subnet ${DHCP_PFX1}.0 netmask 255.255.255.0 {
+	  option subnet-mask 255.255.255.0;
+	  option broadcast-address ${DHCP_PFX1}.255;
+	  option time-offset 0;
+	  option routers ${DHCP_ROUTER};
+	  option domain-name "${DOMAIN}";
+	  option domain-name-servers ${DHCP_PRI}, ${DHCP_SEC};
+	  option netbios-name-servers ${DHCP_SEC}, ${DHCP_PRI};
+	  option ntp-servers ${DHCP_SEC}, ${DHCP_PRI};
+	  option polycom_vlan "VLAN-A=50;";
+	  pool {
+	    failover peer "dhcp-failover";
+	    max-lease-time 7200; # 2 hours
+	    range ${DHCP_PFX1}.51 ${DHCP_PFX1}.250;
+	  }
+	}
+	__EOD__
+
+  if [ -n "${DHCP_PFX2}" ]; then
+    cat >>$OUT <<-__EOD__
+
+	subnet ${DHCP_PFX2}.0 netmask 255.255.255.0 {
+	  option subnet-mask 255.255.255.0;
+	  option broadcast-address ${DHCP_PFX2}.255;
+	  option time-offset 0;
+	  option routers ${DHCP_ROUTER};
+	  option domain-name "${DOMAIN}";
+	  option domain-name-servers ${DHCP_PRI}, ${DHCP_SEC};
+	  option netbios-name-servers ${DHCP_SEC}, ${DHCP_PRI};
+	  option ntp-servers ${DHCP_SEC}, ${DHCP_PRI};
+	  option tftp-server-name "${TFTP_SVR}";
+	  option polycom_server "tftp://${TFTP_SVR}";
+	  #option polycom_vlan "VLAN-A=50;";
+	  pool {
+	    failover peer "dhcp-failover";
+	    default-lease-time 21600;
+	    max-lease-time 43200;
+	    range ${DHCP_PFX2}.51 ${DHCP_PFX2}.250;
+	  }
+	}
+	__EOD__
+  fi
+}
+
+reserve() {
+
+  OUT="$4"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-reservations-ip4.conf"
+
+  cat >>$OUT <<-__EOD__
+	host $1 {
+	   hardware ethernet $2;
+	   fixed-address $3;
+	   option host-name "$1";
+	}
+	__EOD__
+}
+
+create_reservations_conf() {
+
+  OUT="$1"
+  [ -z "$OUT" ] && OUT="/etc/dhcp/dhcpd-reservations-ip4.conf"
+
+  # If there is a reservations list, use it.  
+  if [ -e /etc/dhcp/ip4-reservations ]; then
+    echo "Creating $OUT file."
+    . /etc/dhcp/ip4-reservations
+  else
+      cat >>$OUT <<-__EOD__
+	# Example IPv4 reservation.
+	
+	#host HOST_NAME {
+	#   hardware ethernet 08:80:39:10:cd:d8;
+	#   fixed-address 192.168.1.17;
+	#   option host-name "HOST_NAME";
+	#}
+	__EOD__
+  fi
+}
+
+required_option() {
+
+  local tmp
+  eval "tmp=\$$1"
+  if [ -z "$tmp" ]; then
+    echo "Error: Option '$1' is required."
+    MISSING="true"
+  else
+    echo "Info:  Option '$1' is $tmp." 
+  fi
+}
+
+# Start.
+
+# Check required options:
+
+MISSING="false"
+#required_option DHCP_OMAPI
+required_option REALM
+required_option DHCP_PRI
+required_option DHCP_SEC
+required_option DHCP_PFX1
+required_option DHCP_ROUTER
+required_option DHCP_TFTP
+
+if [ "$MISSING" = "true" ]; then
+  echo "Error: Missing required option(s)."
+  exit 1
+fi
+
+# Create a kerberos config, if needed.
+if [ ! -e /etc/dhcp/krb5.conf ]; then
+  echo "Creating /etc/dhcp/krb5.conf file."
+  cat >/etc/dhcp/krb5.conf <<-__EOD__
+	[libdefaults]
+	default_realm = $REALM
+	dns_lookup_realm = false
+	dns_lookup_kdc = true
+	__EOD__
+fi
+
+# Create the config files.
+[ ! -e /etc/dhcp/dhcpd-primary.conf ]           && create_primary_conf
+[ ! -e /etc/dhcp/dhcpd-secondary.conf ]         && create_secondary_conf
+
+[ ! -e /etc/dhcp/dhcpd-omapi.conf ]             && create_omapi_conf
+[ ! -e /etc/dhcp/dhcpd-subnets-ip4.conf ]       && create_subnet_conf
+[ ! -e /etc/dhcp/dhcpd-reservations-ip4.conf ]  && create_reservations_conf
+[ ! -e /etc/dhcp/dhcpd-dyndns.conf ]            && create_dyndns_conf
+
+# Create link to config file, if needed.
+if [ ! -L /etc/dhcp/dhcp.conf ]; then
+  if [ "$(echo $MODE | tr 'A-Z' 'a-z')" = 'primary' ]; then
+    ln -s dhcpd-primary.conf    /etc/dhcp/dhcpd.conf  
+  else 
+    ln -s dhcpd-secondary.conf  /etc/dhcp/dhcpd.conf
+  fi
+fi
+
+exit 0
+

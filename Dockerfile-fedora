@@ -1,0 +1,63 @@
+FROM fedora:latest
+
+LABEL MAINTAINER Richard Lochner, Clone Research Corp. <lochner@clone1.com> \
+      org.label-schema.name = "dhcpd" \
+      org.label-schema.description = "DHCP Server" \
+      org.label-schema.vendor = "Clone Research Corp" \
+      org.label-schema.usage = "https://github.com/lochnerr/dhcpd" \
+      org.label-schema.url = "https://www.samba.org/" \
+      org.label-schema.vcs-url = "https://github.com/lochnerr/dhcpd.git"
+
+# samba-dc needed because it includes samba-tool which is used to update client address.
+# samba-winbind-clients needed for wbinfo in unmodified dhcp-dyndns.sh.
+
+RUN dnf -y upgrade \
+ && dnf -y install --nodocs \
+        samba-dc \
+        samba-winbind-clients \
+        krb5-workstation \
+        bind-utils \
+	bind-dnssec-utils \
+	dhcp-server \
+        iproute \
+        procps-ng \
+        hostname \
+        iputils \
+        net-tools \
+        nmap \
+        findutils \
+        traceroute \
+ && dnf -y clean all
+
+# The persistent configuration volume.
+VOLUME /etc/dhcp
+
+# The persistent data volume.
+VOLUME /var/lib/dhcpd
+
+# Command to run the daemon.
+CMD [ "/usr/local/bin/dhcpd-run" ]
+
+# Copy the script files and other artifacts.
+COPY bin/. /usr/local/bin/
+
+# The default kerberos is no good.
+RUN mv /etc/krb5.conf /etc/krb5-orig.conf
+
+# Do not use the default config.
+RUN mv /etc/dhcp/dhcpd.conf /etc/dhcp/dhcp-orig.conf
+
+# Do one-time samba configuration.
+##RUN . /usr/local/bin/samba-configure \
+## && samba_configure
+
+# Set systemd stop signal.
+STOPSIGNAL SIGRTMIN+3
+
+# Set the build labels.
+# Do this last to allow build cacheing during development.
+ARG BUILD_DATE
+ARG VCS_REF
+LABEL org.label-schema.build-date = $BUILD_DATE \
+      org.label-schema.vcs-ref = $VCS_REF
+
