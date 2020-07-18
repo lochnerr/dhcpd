@@ -171,8 +171,8 @@ if [[ $name == dhcp* ]]; then
     exit 0
 fi
 
-samba_tool_dns() {
-  samba_tool dns "$@"
+samba-tool-dns() {
+  samba-tool dns "$@" >/dev/null 2>&1
   local dnsres="$?"
   if [ "$?" != "0" ]; then
     echo "Warning: Command 'samba_tool dns $@' failed with status ${result}."
@@ -189,12 +189,12 @@ case "${action}" in
         A_REC=$(host -t A "${name}" | awk '{print $NF}')
         # check for dots
         if [[ $A_REC == *.* ]]; then
-            samba-tool_dns delete ${Server} ${domain} "${name}" A ${ip} -k yes
+            samba-tool-dns delete ${Server} ${domain} "${name}" A ${ip} -k yes
             result1="$?"
         else
             result1=0
         fi
-        samba-tool_dns add ${Server} ${domain} "${name}" A ${ip} -k yes
+        samba-tool-dns add ${Server} ${domain} "${name}" A ${ip} -k yes
         result2="$?"
 
         # get existing reverse zones (if any)
@@ -210,12 +210,12 @@ case "${action}" in
               if [[ ${ip} = $ZoneIP* ]] && [ "$ZoneIP" = "$RZIP" ]; then
                   host -t PTR ${ip} > /dev/null 2>&1
                   if [ "$?" -eq 0 ]; then
-                      samba-tool_dns delete ${Server} ${revzone} ${IP2add} PTR "${name}".${domain} -k yes
+                      samba-tool-dns delete ${Server} ${revzone} ${IP2add} PTR "${name}".${domain} -k yes
                       result3="$?"
                   else
                       result3='0'
                   fi
-                  samba-tool_dns add ${Server} ${revzone} ${IP2add} PTR "${name}".${domain} -k yes
+                  samba-tool-dns add ${Server} ${revzone} ${IP2add} PTR "${name}".${domain} -k yes
                   result4="$?"
                   break
               else
@@ -227,7 +227,7 @@ case "${action}" in
  delete)
         _KERBEROS
 
-        samba-tool_dns delete ${Server} ${domain} "${name}" A ${ip} -k yes
+        samba-tool-dns delete ${Server} ${domain} "${name}" A ${ip} -k yes
         result1="$?"
         # get existing reverse zones (if any)
         ReverseZones=$(samba-tool dns zonelist ${Server} --reverse | grep 'pszZoneName' | awk '{print $NF}')
@@ -241,7 +241,7 @@ case "${action}" in
               if [[ ${ip} = $ZoneIP* ]] && [ "$ZoneIP" = "$RZIP" ]; then
                   host -t PTR ${ip} > /dev/null 2>&1
                   if [ "$?" -eq 0 ]; then
-                      samba-tool_dns delete ${Server} ${revzone} ${IP2add} PTR "${name}".${domain} -k yes
+                      samba-tool-dns delete ${Server} ${revzone} ${IP2add} PTR "${name}".${domain} -k yes
                       result2="$?"
                   else
                       result2='0'

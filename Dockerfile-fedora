@@ -47,6 +47,9 @@ RUN mv /etc/krb5.conf /etc/krb5-orig.conf
 # Do not use the default config.
 RUN mv /etc/dhcp/dhcpd.conf /etc/dhcp/dhcp-orig.conf
 
+# Add sym link for keytab to persistent /etc/dhcp directory.
+ln -sf /etc/dhcp/dhcpduser.keytab /etc/dhcpduser.keytab
+
 # Disable unneccessary container services.
 RUN systemctl mask \
   dnf-makecache.timer \
