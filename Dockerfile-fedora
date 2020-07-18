@@ -36,7 +36,7 @@ VOLUME /etc/dhcp
 VOLUME /var/lib/dhcpd
 
 # Command to run the daemon.
-CMD [ "/usr/local/bin/dhcpd-run" ]
+CMD [ "/usr/sbin/dhcpd","-f","-cf","/etc/dhcp/dhcpd.conf","-user","dhcpd","-group","dhcpd","--no-pid" ]
 
 # Copy the script files and other artifacts.
 COPY bin/. /usr/local/bin/
@@ -47,9 +47,22 @@ RUN mv /etc/krb5.conf /etc/krb5-orig.conf
 # Do not use the default config.
 RUN mv /etc/dhcp/dhcpd.conf /etc/dhcp/dhcp-orig.conf
 
-# Do one-time samba configuration.
-##RUN . /usr/local/bin/samba-configure \
-## && samba_configure
+# Disable unneccessary container services.
+RUN systemctl mask \
+  dnf-makecache.timer \
+  systemd-remount-fs.service \
+  dev-hugepages.mount sys-fs-\
+  fuse-connections.mount \
+  systemd-logind.service \
+  getty.target \
+  console-getty.service \
+  systemd-udev-trigger.service \
+  systemd-udevd.service \
+  systemd-random-seed.service \
+  systemd-machine-id-commit.service
+
+# Enable the service.
+RUN systemctl enable dhcpd.service
 
 # Set systemd stop signal.
 STOPSIGNAL SIGRTMIN+3
