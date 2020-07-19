@@ -138,6 +138,8 @@ action="$1"
 ip="$2"
 DHCID="$3"
 name="${4%%.*}"
+# Translate invalid underscores and colons in name to hyphens.
+name="$(echo $name | tr '_:' '--')"
 
 # Exit if no ip address or mac-address
 if [ -z "${ip}" ] || [ -z "${DHCID}" ]; then
